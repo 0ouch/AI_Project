@@ -1,40 +1,27 @@
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
-from model import get_recommendations # Импортируем модель Участника 2
+import csv
+from model import get_recommendations, get_recommendations_for_likes
 
 app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+movies_db = {}
+with open('clean_movies_ui.csv', 'r', encoding='utf-8') as f:
+    for row in csv.DictReader(f):
+        movies_db[int(row['movieId'])] = {"title": row['title'], "poster_url": row['poster_url']}
 
-# Загружаем базу фильмов (от Участника 1)
-print("Загрузка базы фильмов...")
-movies_df = pd.read_csv('clean_movies_ui.csv')
-movies_df.set_index('movieId', inplace=True)
-print("База загружена!")
+def format_response(ids):
+    return [{"movie_id": m_id, "title": movies_db[m_id]["title"], "poster_url": movies_db[m_id]["poster_url"]} for m_id in ids if m_id in movies_db]
 
-@app.post("/recommend/user/{user_id}")
-def recommend_movies(user_id: int, liked_data: dict = Body(...)):
-    # 1. Получаем лайки (пока модель их не использует, но фронт присылает)
-    liked_movies = liked_data.get("liked_movie_ids", [])
-    
-    # 2. Спрашиваем у модели Участника 2, что посоветовать
-    recommended_ids = get_recommendations(user_id)
-    
-    # 3. Собираем ответ с реальными картинками
-    result = []
-    for m_id in recommended_ids:
-        if m_id in movies_df.index: # Проверка, что фильм есть в базе
-            movie = movies_df.loc[m_id]
-            result.append({
-                "movie_id": int(m_id),
-                "title": str(movie['title']),
-                "poster_url": str(movie['poster_url'])
-            })
-            
-    return {"user_id": user_id, "recommendations": result}
+@app.get("/recommend/{user_id}")
+def recommend_by_user(user_id: int):
+    return {"user_id": user_id, "recommendations": format_response(get_recommendations(user_id))}
+
+@app.post("/recommend/likes")
+def recommend_by_likes(liked_data: dict = Body(...)):
+    try:
+        ids = get_recommendations_for_likes(liked_data.get("liked_movie_ids", []))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Unknown movie IDs")
+    return {"recommendations": format_response(ids)}
